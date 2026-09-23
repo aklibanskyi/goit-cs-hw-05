@@ -1,1 +1,92 @@
+import argparse
+import asyncio
+import logging
+from pathlib import Path
+import aioshutil
 
+# Налаштування логування
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+
+
+async def copy_file(file_path: Path, output_folder: Path) -> None:
+    """Асинхронно копіює файл у відповідну підпапку на основі його розширення."""
+    try:
+        # Визначаємо розширення. Якщо розширення немає — 'no_extension'
+        ext = file_path.suffix.lstrip(".").lower()
+        subfolder_name = ext if ext else "no_extension"
+
+        target_dir = output_folder / subfolder_name
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        destination = target_dir / file_path.name
+
+        # Асинхронне копіювання файлу
+        await aioshutil.copyfile(file_path, destination)
+        logging.info("Скопійовано: %s -> %s", file_path, destination)
+
+    except Exception as err:
+        logging.error("Помилка при копіюванні %s: %s", file_path, err)
+
+
+async def read_folder(source_folder: Path, output_folder: Path) -> None:
+    """Рекурсивно обходить вихідну папку та запускає задачі копіювання файлів."""
+    tasks = []
+
+    try:
+        # Рекурсивний обхід файлової системи за допомогою rglob
+        for item in source_folder.rglob("*"):
+            if item.is_file():
+                # Створюємо асинхронну задачу на копіювання кожного окремого файлу
+                task = asyncio.create_task(copy_file(item, output_folder))
+                tasks.append(task)
+
+        if tasks:
+            # Очікуємо завершення всіх асинхронних операцій
+            await asyncio.gather(*tasks)
+            logging.info("Сортування завершено. Оброблено файлів: %d", len(tasks))
+        else:
+            logging.warning("У вихідній директорії файлів не знайдено.")
+
+    except Exception as err:
+        logging.error("Помилка при читанні папки %s: %s", source_folder, err)
+
+
+def parse_arguments() -> argparse.Namespace:
+    """Парсинг аргументів командного рядка."""
+    parser = argparse.ArgumentParser(
+        description="Асинхронне сортування файлів за розширенням."
+    )
+    parser.add_argument(
+        "-s", "--source",
+        type=Path,
+        required=True,
+        help="Шлях до вихідної папки (source folder)"
+    )
+    parser.add_argument(
+        "-o", "--output",
+        type=Path,
+        required=True,
+        help="Шлях до цільової папки (output folder)"
+    )
+    return parser.parse_args()
+
+
+async def main() -> None:
+    args = parse_arguments()
+    source: Path = args.source.resolve()
+    output: Path = args.output.resolve()
+
+    if not source.exists() or not source.is_dir():
+        logging.error("Вихідна папка не існує або не є директорією: %s", source)
+        return
+
+    output.mkdir(parents=True, exist_ok=True)
+    await read_folder(source, output)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
